@@ -17,14 +17,16 @@
 
   // ---- Helpers -------------------------------------------------------------
 
-  /** Same normalization as the server's default: drop spaces/dashes/dots, upper-case. */
-  const normalize = (raw) => (raw || "").replace(/[\s\-.]/g, "").toUpperCase();
+  /** Same normalization as the server: drop spaces/dashes/dots, upper-case. */
+  const stripSeparators = (raw) => (raw || "").replace(/[\s.-]/g, "");
+  const normalize = (raw) => stripSeparators(raw).toUpperCase();
 
   /** Returns an error string, or "" when the identifier is valid for the brand. */
   function validateIdentifier(brand, raw) {
     const value = normalize(raw);
     if (!value) return "";  // empty is "not yet", not an error, while typing
-    const bad = [...new Set([...value].filter((c) => !/[0-9A-Z]/.test(c)))];
+    // Check before upper-casing: toUpperCase() turns "ß" into "SS".
+    const bad = [...new Set([...stripSeparators(raw)].filter((c) => !/^[0-9A-Za-z]$/.test(c)))];
     if (bad.length) return `Invalid character(s): ${bad.join(" ")}. ${brand.requirement}`;
     if (brand.min_len === brand.max_len && value.length !== brand.min_len) {
       return `Expected exactly ${brand.min_len} characters (you have ${value.length}).`;
@@ -46,10 +48,18 @@
     try {
       res = await fetch(path, {
         headers: { "Content-Type": "application/json" },
+        // When the login expires, Cloudflare Access answers with a redirect
+        // to its sign-in page; catch it instead of following it.
+        redirect: "manual",
         ...options,
       });
     } catch (_) {
       throw new Error("Can't reach the server. Check your connection and try again.");
+    }
+    if (res.type === "opaqueredirect" || res.status === 401) {
+      const err = new Error("Your sign-in has expired. Reload the page to sign in again.");
+      err.expired = true;
+      throw err;
     }
     let body = null;
     try { body = await res.json(); } catch (_) { /* non-JSON body */ }
@@ -149,6 +159,17 @@
 
   // ---- Brand selection & guide --------------------------------------------
 
+  const CHIP_BASE = "brand-chip flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-xs font-medium transition ";
+  const CHIP = {
+    off: CHIP_BASE + "border-slate-200 bg-white hover:border-slate-300 dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-white/20",
+    on: CHIP_BASE + "border-transparent bg-white ring-2 ring-accent-500 dark:bg-white/[0.03]",
+  };
+  const BADGE_BASE = "grid h-8 w-8 place-items-center rounded-lg text-sm font-bold ";
+  const BADGE = {
+    off: BADGE_BASE + "bg-slate-100 text-slate-700 dark:bg-white/10 dark:text-slate-200",
+    on: BADGE_BASE + "bg-accent-500 text-white dark:text-slate-950",
+  };
+
   function renderBrands() {
     const grid = $("brandGrid");
     grid.innerHTML = "";
@@ -157,12 +178,8 @@
       btn.type = "button";
       btn.setAttribute("role", "radio");
       btn.dataset.brand = b.key;
-      btn.className =
-        "brand-chip flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-xs font-medium transition " +
-        "border-slate-200 bg-white hover:border-slate-300 dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-white/20";
-      const badge = el("span",
-        "grid h-8 w-8 place-items-center rounded-lg bg-slate-100 text-sm font-bold text-slate-700 dark:bg-white/10 dark:text-slate-200",
-        b.icon);
+      btn.className = CHIP.off;
+      const badge = el("span", BADGE.off, b.icon);
       btn.append(badge, el("span", "", b.name));
       btn.addEventListener("click", () => selectBrand(b.key));
       grid.append(btn);
@@ -178,14 +195,11 @@
     for (const chip of document.querySelectorAll(".brand-chip")) {
       const on = chip.dataset.brand === key;
       chip.setAttribute("aria-checked", on ? "true" : "false");
-      chip.classList.toggle("ring-2", on);
-      chip.classList.toggle("ring-accent-500", on);
-      chip.classList.toggle("border-transparent", on);
-      const badge = chip.firstElementChild;
-      badge.classList.toggle("bg-accent-500", on);
-      badge.classList.toggle("text-white", on);
-      badge.classList.toggle("dark:bg-accent-500", on);
-      badge.classList.toggle("dark:text-slate-950", on);
+      // Swap whole class sets: two competing utilities on one element
+      // (e.g. bg-slate-100 and bg-accent-500) resolve by stylesheet order,
+      // not by which was added last.
+      chip.className = on ? CHIP.on : CHIP.off;
+      chip.firstElementChild.className = on ? BADGE.on : BADGE.off;
     }
 
     // Guide
@@ -259,7 +273,7 @@
     row.append(code, copy);
     card.append(row);
 
-    const meta = el("dl", "mt-4 grid grid-cols-[auto,1fr] gap-x-4 gap-y-1 text-sm");
+    const meta = el("dl", "mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm");
     const add = (k, v) => {
       if (v == null || v === "") return;
       meta.append(el("dt", "text-slate-500 dark:text-slate-400", k), el("dd", "break-words", String(v)));

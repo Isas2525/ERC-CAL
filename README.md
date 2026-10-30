@@ -1,7 +1,8 @@
 # ERC-CAL
 
-A personal vault for the infotainment unlock codes of **your own vehicles**
-(Toyota, Lexus, Nissan, Honda, Mitsubishi, Clarion units).
+A private vault for the infotainment unlock codes of **your own vehicles**
+(Toyota, Lexus, Nissan, Honda, Mitsubishi, Clarion units), served at
+tokyomodelvault.com.
 
 After a battery disconnect, many head units lock and ask for a code. ERC-CAL
 lets you save the code you were issued (from your dealer, paperwork, or the
@@ -12,45 +13,60 @@ or serial number, and find it again in seconds.
 > reverse-engineer unlock codes, and it contains no manufacturer algorithms.
 > The identifier you type is only a database key.
 
+## How it runs
+
+- **Cloudflare Worker** (`src/`) serves the JSON API under `/api/*` and the
+  frontend (`public/`, bundled into the Worker at build time).
+- **D1** (Cloudflare's SQLite) stores the codes.
+- **Cloudflare Access** sits in front of the domain: only the owner's email
+  can sign in (one-time PIN sent by email). The Worker also verifies Access's
+  signed token on every API call and refuses everything if login isn't
+  configured, so codes are never served without a valid sign-in.
+- `workers.dev` and preview URLs are off, so the custom domain is the only
+  way in.
+
 ## Features
 
 - Brand selector with a per-brand guide to finding the ERC code or serial
-- Live input validation (exact 16-char hex for Toyota/Lexus ERC codes, length
-  and character rules for serials) mirrored on the server
-- Forgiving input: spaces, dashes, dots and case are ignored, so
-  `1a2b 3c4d-5e6f` and `1A2B3C4D5E6F` find the same record
+- Live input validation mirrored on the server (exact 16-char hex for
+  Toyota/Lexus ERC codes, length and character rules for serials)
+- Forgiving input: spaces, dashes, dots and case are ignored
 - Save / update / delete codes, with optional model, year and notes
-- Copy-to-clipboard, loading states, clear error messages
+- Copy-to-clipboard, loading states, clear error messages, expired-login notice
 - Dark and light themes, mobile-first layout
-- Pluggable fallback providers (e.g. a licensed code service or your own
-  PostgreSQL), with results cached locally
+- Strict Content-Security-Policy; API responses are never cached
+- Pluggable fallback providers (`src/fallback.ts`), results cached in D1
 
-## Run
+## Develop
+
+Requires Node 22+. Use npm 11 (`packageManager` in package.json): npm 10
+crashes resolving vitest's dependencies.
 
 ```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+npx npm@11.21.0 install
+echo 'AUTH_DISABLED="true"' > .dev.vars        # local only: skips Access
+npx wrangler d1 migrations apply erc-cal --local
+npm run dev                                    # http://localhost:8787
 ```
 
-Open http://127.0.0.1:8000. API docs are at `/docs`.
+```bash
+npm test          # 53 tests in the Workers runtime with a local D1
+npm run typecheck
+```
 
-| Variable | Default | What |
+## Configuration
+
+| Name | Where | What |
 | --- | --- | --- |
-| `ERC_CAL_DB` | `backend/data/codes.db` | SQLite file path |
-| `ERC_CAL_FRONTEND` | `frontend/` | Directory served at `/` |
-| `ERC_CAL_DISABLE_FALLBACK` | unset | `1` disables fallback providers |
-
-## Test
-
-```bash
-cd backend
-pytest -q
-```
+| `DB` | D1 binding | The `erc-cal` database |
+| `ACCESS_TEAM_DOMAIN` | var | e.g. `https://<team>.cloudflareaccess.com` |
+| `ACCESS_AUD` | var | The Access application's audience tag |
+| `ALLOWED_EMAILS` | secret | Comma-separated emails allowed through (defense in depth) |
+| `AUTH_DISABLED` | `.dev.vars` only | `"true"` skips Access locally. Never set in production. |
 
 ## API
+
+All routes require a valid Access sign-in.
 
 | Method | Path | Body | Returns |
 | --- | --- | --- | --- |
@@ -60,32 +76,20 @@ pytest -q
 | POST | `/api/codes` | `{brand, identifier, code, model?, model_year?, notes?}` | `{created, ...}` |
 | DELETE | `/api/codes/{brand}/{identifier}` | | `{deleted}` or 404 |
 
-Validation errors return `422` with `{error, field}` so the UI can point at
-the offending input.
+POST bodies must be `application/json`. Validation errors return `422` with
+`{error, field}` so the UI can point at the offending input.
 
 ## Layout
 
 ```
-backend/app/brands.py      brand rules + retrieval guides (single source of truth)
-backend/app/validation.py  normalization and validation with user-facing messages
-backend/app/db.py          SQLite store (swap this module for PostgreSQL)
-backend/app/fallback.py    external provider interface
-backend/app/main.py        FastAPI routes and error handling, serves the frontend
-frontend/                  static UI (index.html + app.js)
+src/brands.ts       brand rules + retrieval guides (single source of truth)
+src/validation.ts   normalization and validation with user-facing messages
+src/store.ts        D1 access
+src/auth.ts         Cloudflare Access JWT verification
+src/fallback.ts     external provider interface
+src/index.ts        routing, error handling, page headers
+public/             index.html, app.js, theme.js (styles.css is built)
+styles/input.css    Tailwind v4 source
+migrations/         D1 schema
+test/               vitest suites (run inside workerd)
 ```
-
-### Adding a fallback provider
-
-Implement `FallbackProvider` in `backend/app/fallback.py` (a `name` and a
-`lookup(brand, identifier) -> str | None`) and append it in
-`build_providers()`, typically gated on an API-key env var. A provider that
-raises is logged and skipped; a hit is cached into the local database.
-
-## Before deploying publicly
-
-- **There is no authentication.** Anyone who can reach the server can read
-  and change stored codes. Keep it on localhost or a private network, or add
-  auth before exposing it.
-- The UI loads Tailwind from its Play CDN, which is meant for development.
-  For production, compile the CSS with the Tailwind CLI and serve it as a
-  static file.

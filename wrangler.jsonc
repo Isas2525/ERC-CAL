@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "erc-cal",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // Only reachable through the custom domain, which Cloudflare Access
+  // protects. A workers.dev or preview URL would skip the login.
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "erc-cal",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    // Set once the Access application exists (see README).
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "",
+    // "true" only in .dev.vars for local development.
+    "AUTH_DISABLED": "",
+    // Comma-separated; set as a secret: wrangler secret put ALLOWED_EMAILS
+    "ALLOWED_EMAILS": ""
+  }
+}

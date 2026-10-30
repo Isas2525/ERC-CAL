@@ -1,8 +1,7 @@
-.venv/
-__pycache__/
-*.pyc
-.pytest_cache/
-backend/data/
-*.db
-.env
+node_modules/
+.wrangler/
+.dev.vars
+worker-configuration.d.ts
+public/styles.css
+src/assets.gen.ts
 .DS_Store
