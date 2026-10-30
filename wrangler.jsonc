@@ -3,6 +3,7 @@
   "name": "erc-cal",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
+  "minify": true,
   // Only reachable through the custom domain, which Cloudflare Access
   // protects. A workers.dev or preview URL would skip the login.
   "workers_dev": false,
@@ -12,7 +13,7 @@
     {
       "binding": "DB",
       "database_name": "erc-cal",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "d18e6e2c-47d0-42df-91d3-2672432861ca",
       "migrations_dir": "migrations"
     }
   ],
