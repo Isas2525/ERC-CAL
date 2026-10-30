@@ -3,6 +3,5 @@ node_modules/
 .dev.vars
 worker-configuration.d.ts
 public/styles.css
-src/assets.gen.ts
 .DS_Store
 dist/

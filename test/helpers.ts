@@ -1,6 +1,5 @@
 import { env } from "cloudflare:test";
 import { handleRequest, type Deps } from "../src/index";
-import type { FallbackProvider } from "../src/fallback";
 
 export const TEAM = "https://tmv-test.cloudflareaccess.com";
 export const AUD = "test-audience-tag";
@@ -15,7 +14,7 @@ export const accessEnv = (extra: Partial<Record<string, string>> = {}): Env =>
 export function call(
   path: string,
   init: RequestInit & { json?: unknown } = {},
-  opts: { env?: Env; providers?: FallbackProvider[]; fetchJwks?: Deps["fetchJwks"] } = {},
+  opts: { env?: Env } & Deps = {},
 ): Promise<Response> {
   const { json, ...rest } = init;
   const headers = new Headers(rest.headers);
@@ -25,14 +24,17 @@ export function call(
     headers,
     body: json !== undefined ? JSON.stringify(json) : rest.body,
   });
-  return handleRequest(request, opts.env ?? openEnv(), {
-    providers: opts.providers ?? [],
-    fetchJwks: opts.fetchJwks,
-  });
+  return handleRequest(request, opts.env ?? openEnv(), { fetchJwks: opts.fetchJwks, fetchVin: opts.fetchVin });
 }
 
 export const post = (path: string, json: unknown, opts?: Parameters<typeof call>[2]) =>
   call(path, { method: "POST", json }, opts);
+
+export const put = (path: string, json: unknown, opts?: Parameters<typeof call>[2]) =>
+  call(path, { method: "PUT", json }, opts);
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const body = async (r: Response): Promise<any> => r.json();
 
 // --- Signing test JWTs ------------------------------------------------------
 

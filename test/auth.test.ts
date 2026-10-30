@@ -79,8 +79,9 @@ describe("cloudflare access", () => {
     expect((await get(token, accessEnv({ ALLOWED_EMAILS: "someone@else.com" }))).status).toBe(403);
   });
 
-  it("still serves the page itself (Access guards it at the edge)", async () => {
-    const r = await call("/", {}, { env: accessEnv() });
-    expect(r.status).toBe(200);
+  it("guards every API route, not just health", async () => {
+    for (const path of ["/api/vehicles", "/api/vehicles/1", "/api/export", "/api/vin/ZVW301234567"]) {
+      expect((await call(path, {}, { env: accessEnv() })).status).toBe(401);
+    }
   });
 });

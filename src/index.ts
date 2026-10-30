@@ -1,28 +1,26 @@
 /**
- * ERC-CAL Worker: JSON API under /api/*, and the static frontend.
+ * Tokyo Model Vault Worker: the JSON API under /api/*. Everything else
+ * (the app itself) is served by Workers Static Assets from public/, with
+ * its security headers in public/_headers.
  */
 
 import { AuthError, type JwksFetcher, requireAccess } from "./auth";
-import { ASSETS } from "./assets.gen";
-import { BRANDS } from "./brands";
-import { buildProviders, type FallbackProvider, queryProviders } from "./fallback";
-import { CodeStore } from "./store";
-import {
-  normalizeIdentifier,
-  optionalText,
-  optionalYear,
-  resolveBrand,
-  validateCode,
-  ValidationError,
-} from "./validation";
+import { DuplicateVinError, type HistoryEntry, VehicleStore } from "./store";
+import { parseVehicle, ValidationError } from "./validation";
+import { decodeVin, type VinFetcher } from "./vin";
+import { checkCode, checkErc, checkSerial, findSource } from "../public/js/shared/rules.js";
 
 export interface Deps {
-  providers: FallbackProvider[];
   fetchJwks?: JwksFetcher;
+  fetchVin?: VinFetcher;
 }
 
 class HttpError extends Error {
-  constructor(readonly status: number, message: string, readonly field: string | null = null) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly extra: Record<string, unknown> = {},
+  ) {
     super(message);
   }
 }
@@ -34,36 +32,23 @@ const API_HEADERS = {
   "X-Content-Type-Options": "nosniff",
 };
 
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: API_HEADERS });
-const error = (status: number, message: string, field: string | null = null) => json({ error: message, field }, status);
+const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(body), { status, headers: { ...API_HEADERS, ...headers } });
 
-const PAGE_HEADERS = {
-  "Content-Security-Policy": [
-    "default-src 'self'",
-    "script-src 'self'",
-    "style-src 'self' https://fonts.googleapis.com",
-    "font-src https://fonts.gstatic.com",
-    "img-src 'self' data:",
-    "connect-src 'self'",
-    "frame-ancestors 'none'",
-    "base-uri 'none'",
-    "form-action 'self'",
-  ].join("; "),
-  "X-Content-Type-Options": "nosniff",
-  "Referrer-Policy": "no-referrer",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  "Strict-Transport-Security": "max-age=31536000",
-};
+const MAX_BODY = 32 * 1024;
+const MAX_IMPORT = 2 * 1024 * 1024;
 
-async function readJson(request: Request): Promise<Record<string, unknown>> {
+async function readJson(request: Request, maxBytes = MAX_BODY): Promise<Record<string, unknown>> {
   // Requiring application/json means a cross-site form can't post here
   // without a CORS preflight, which this API never grants.
   if (!(request.headers.get("Content-Type") || "").toLowerCase().startsWith("application/json")) {
     throw new HttpError(415, "Requests must be sent as JSON.");
   }
+  const text = await request.text();
+  if (text.length > maxBytes) throw new HttpError(413, "That request is too large.");
   let body: unknown;
   try {
-    body = await request.json();
+    body = JSON.parse(text);
   } catch {
     throw new HttpError(400, "Request body is not valid JSON.");
   }
@@ -71,158 +56,154 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   return body as Record<string, unknown>;
 }
 
-function limited(value: unknown, field: string, max: number): unknown {
-  if (typeof value === "string" && value.length > max) {
-    throw new ValidationError(`${field} is too long (max ${max} characters).`, field);
-  }
-  return value;
+function parseId(raw: string): number {
+  const id = Number(raw);
+  if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(404, "Vehicle not found.");
+  return id;
 }
 
-async function lookup(request: Request, store: CodeStore, providers: FallbackProvider[]): Promise<Response> {
-  const body = await readJson(request);
-  const brand = resolveBrand(limited(body.brand, "brand", 32));
-  const identifier = normalizeIdentifier(brand, limited(body.identifier, "identifier", 128));
-
-  const record = await store.get(brand.key, identifier);
-  if (record) {
-    return json({
-      found: true,
-      brand: brand.key,
-      identifier,
-      code: record.code,
-      source: "local",
-      model: record.model,
-      model_year: record.model_year,
-      notes: record.notes,
-      message: "Unlock code found.",
-    });
-  }
-
-  const hit = await queryProviders(providers, brand.key, identifier);
-  if (hit) {
-    await store.upsert(brand.key, identifier, { code: hit.code, notes: `via ${hit.provider}` });
-    return json({
-      found: true,
-      brand: brand.key,
-      identifier,
-      code: hit.code,
-      source: hit.provider,
-      model: null,
-      model_year: null,
-      notes: null,
-      message: `Unlock code found via ${hit.provider}.`,
-    });
-  }
-
-  return json({
-    found: false,
-    brand: brand.key,
-    identifier,
-    code: null,
-    source: null,
-    model: null,
-    model_year: null,
-    notes: null,
-    message:
-      `Nothing is stored for ${brand.name} ${brand.identifier_noun} ${identifier}. ` +
-      "Check it was typed exactly as shown, or add the code you were issued using 'Save a code'.",
-  });
+async function vehicleDetail(store: VehicleStore, id: number): Promise<Response> {
+  const vehicle = await store.get(id);
+  if (!vehicle) throw new HttpError(404, "Vehicle not found.");
+  return json({ ...vehicle, history: await store.history(id) });
 }
 
-async function saveCode(request: Request, store: CodeStore): Promise<Response> {
-  const body = await readJson(request);
-  const brand = resolveBrand(limited(body.brand, "brand", 32));
-  const identifier = normalizeIdentifier(brand, limited(body.identifier, "identifier", 128));
-  const code = validateCode(limited(body.code, "code", 64));
-  const { record, created } = await store.upsert(brand.key, identifier, {
-    code,
-    model: optionalText(body.model, "model", 64),
-    model_year: optionalYear(body.model_year),
-    notes: optionalText(body.notes, "notes", 500),
-  });
-  return json({
-    created,
-    brand: record.brand,
-    identifier: record.identifier,
-    code: record.code,
-    message: created ? "Code saved." : "Code updated.",
-  });
-}
+const isoDate = (v: unknown, fallback: string) =>
+  typeof v === "string" && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString().replace(/\.\d{3}Z$/, "Z") : fallback;
 
-async function deleteCode(brandKey: string, rawIdentifier: string, store: CodeStore): Promise<Response> {
-  const brand = resolveBrand(brandKey);
-  const identifier = normalizeIdentifier(brand, rawIdentifier);
-  if (!(await store.delete(brand.key, identifier))) throw new HttpError(404, "No stored code to delete.");
-  return json({ deleted: true });
+async function importBackup(request: Request, store: VehicleStore): Promise<Response> {
+  const body = await readJson(request, MAX_IMPORT);
+  if (body.app !== "tokyo-model-vault" || !Array.isArray(body.vehicles)) {
+    throw new HttpError(400, "That file isn't a Tokyo Model Vault backup.");
+  }
+  if (body.vehicles.length > 1000) throw new HttpError(413, "A backup can hold at most 1000 vehicles.");
+
+  // Validate everything before writing anything, so a bad file changes nothing.
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const rows = body.vehicles.map((raw: unknown, i: number) => {
+    const v = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    try {
+      const fields = parseVehicle(v);
+      const history = (Array.isArray(v.history) ? v.history : []).slice(0, 200).flatMap((h: Record<string, unknown>) => {
+        const code = checkCode(h?.unlock_code);
+        if (code.error || !code.value) return [];
+        return [{
+          unlock_code: code.value,
+          erc: checkErc(h.erc ?? "").value ?? null,
+          unit_serial: checkSerial(h.unit_serial ?? "").value ?? null,
+          code_source: typeof h.code_source === "string" && findSource(h.code_source) ? h.code_source : null,
+          recorded_at: isoDate(h.recorded_at, now),
+        } satisfies Omit<HistoryEntry, "id">];
+      });
+      const created_at = isoDate(v.created_at, now);
+      return {
+        fields,
+        history,
+        dates: {
+          created_at,
+          updated_at: isoDate(v.updated_at, created_at),
+          code_saved_at: fields.unlock_code ? isoDate(v.code_saved_at, created_at) : null,
+        },
+      };
+    } catch (err) {
+      if (err instanceof ValidationError) {
+        throw new HttpError(422, `Vehicle ${i + 1} in the backup: ${err.message}`, { field: null });
+      }
+      throw err;
+    }
+  });
+
+  let added = 0;
+  for (const row of rows) if (await store.restore(row.fields, row.dates, row.history)) added++;
+  return json({ added, skipped: rows.length - added, message: `Restored ${added} vehicle(s); ${rows.length - added} already in your garage.` });
 }
 
 async function handleApi(request: Request, env: Env, deps: Deps): Promise<Response> {
   const { pathname } = new URL(request.url);
   const method = request.method;
+  const allow = (...methods: string[]) => {
+    if (!methods.includes(method)) throw new HttpError(405, "Method not allowed.");
+  };
 
   await requireAccess(request, env, deps.fetchJwks);
-  const store = new CodeStore(env.DB);
+  const store = new VehicleStore(env.DB);
 
   if (pathname === "/api/health") {
-    if (method !== "GET") throw new HttpError(405, "Method not allowed.");
-    return json({ status: "ok", codes_stored: await store.count() });
+    allow("GET");
+    return json({ status: "ok", ...(await store.stats()) });
   }
-  if (pathname === "/api/brands") {
-    if (method !== "GET") throw new HttpError(405, "Method not allowed.");
-    return json(BRANDS);
+
+  if (pathname === "/api/vehicles") {
+    allow("GET", "POST");
+    if (method === "GET") return json(await store.list());
+    const vehicle = await store.create(parseVehicle(await readJson(request)));
+    return json({ ...vehicle, history: await store.history(vehicle.id) }, 201);
   }
-  if (pathname === "/api/lookup") {
-    if (method !== "POST") throw new HttpError(405, "Method not allowed.");
-    return lookup(request, store, deps.providers);
+
+  const one = pathname.match(/^\/api\/vehicles\/([^/]+)$/);
+  if (one) {
+    allow("GET", "PUT", "DELETE");
+    const id = parseId(one[1]);
+    if (method === "GET") return vehicleDetail(store, id);
+    if (method === "DELETE") {
+      if (!(await store.delete(id))) throw new HttpError(404, "Vehicle not found.");
+      return json({ deleted: true });
+    }
+    const fields = parseVehicle(await readJson(request));
+    if (!(await store.update(id, fields))) throw new HttpError(404, "Vehicle not found.");
+    return vehicleDetail(store, id);
   }
-  if (pathname === "/api/codes") {
-    if (method !== "POST") throw new HttpError(405, "Method not allowed.");
-    return saveCode(request, store);
+
+  const vin = pathname.match(/^\/api\/vin\/([^/]+)$/);
+  if (vin) {
+    allow("GET");
+    return json(await decodeVin(decodeURIComponent(vin[1]), deps.fetchVin));
   }
-  const del = pathname.match(/^\/api\/codes\/([^/]+)\/([^/]+)$/);
-  if (del) {
-    if (method !== "DELETE") throw new HttpError(405, "Method not allowed.");
-    return deleteCode(decodeURIComponent(del[1]), decodeURIComponent(del[2]), store);
+
+  if (pathname === "/api/export") {
+    allow("GET");
+    const exported_at = new Date().toISOString();
+    return json(
+      { app: "tokyo-model-vault", version: 1, exported_at, vehicles: await store.exportAll() },
+      200,
+      { "Content-Disposition": `attachment; filename="tokyo-model-vault-${exported_at.slice(0, 10)}.json"` },
+    );
   }
+
+  if (pathname === "/api/import") {
+    allow("POST");
+    return importBackup(request, store);
+  }
+
   throw new HttpError(404, "Not found.");
 }
 
-function serveAsset(request: Request): Response {
+export async function handleRequest(request: Request, env: Env, deps: Deps = {}): Promise<Response> {
   const { pathname } = new URL(request.url);
-  const asset = ASSETS[pathname === "/" ? "/index.html" : pathname];
-  if (!asset || (request.method !== "GET" && request.method !== "HEAD")) {
-    return new Response("Not found", { status: 404, headers: { "Content-Type": "text/plain", ...PAGE_HEADERS } });
+  if (!pathname.startsWith("/api/")) {
+    // Static assets answer every other path before the Worker runs.
+    return new Response("Not found", { status: 404, headers: { "Content-Type": "text/plain" } });
   }
-  if (request.headers.get("If-None-Match") === asset.etag) {
-    return new Response(null, { status: 304, headers: { ETag: asset.etag } });
-  }
-  return new Response(request.method === "HEAD" ? null : asset.body, {
-    headers: {
-      "Content-Type": asset.type,
-      ETag: asset.etag,
-      // Revalidate every load: the files are tiny and must update on deploy.
-      "Cache-Control": "no-cache",
-      ...PAGE_HEADERS,
-    },
-  });
-}
-
-export async function handleRequest(request: Request, env: Env, deps: Deps): Promise<Response> {
-  const { pathname } = new URL(request.url);
-  if (!pathname.startsWith("/api/")) return serveAsset(request);
   try {
     return await handleApi(request, env, deps);
   } catch (err) {
-    if (err instanceof ValidationError) return error(422, err.message, err.field);
-    if (err instanceof HttpError) return error(err.status, err.message, err.field);
-    if (err instanceof AuthError) return error(err.status, err.message);
+    if (err instanceof ValidationError) return json({ error: err.message, field: err.field }, 422);
+    if (err instanceof HttpError) return json({ error: err.message, field: null, ...err.extra }, err.status);
+    if (err instanceof AuthError) return json({ error: err.message, field: null }, err.status);
+    if (err instanceof DuplicateVinError) {
+      return json({ error: err.message, field: "vin", existing_id: err.existingId }, 409);
+    }
+    if (String(err).includes("no such table")) {
+      console.error("database not migrated", err);
+      return json({ error: "The database needs updating. Run: npm run db:migrate", field: null }, 503);
+    }
     console.error("unhandled error", err);
-    return error(500, "Something went wrong on the server. Please try again.");
+    return json({ error: "Something went wrong on the server. Please try again.", field: null }, 500);
   }
 }
 
 export default {
   fetch(request, env) {
-    return handleRequest(request, env, { providers: buildProviders(env) });
+    return handleRequest(request, env);
   },
 } satisfies ExportedHandler<Env>;

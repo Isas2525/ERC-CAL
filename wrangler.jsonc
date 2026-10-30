@@ -4,8 +4,17 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "minify": true,
+  // Builds public/styles.css before every `wrangler dev` and `wrangler deploy`.
+  "build": { "command": "npm run build:css" },
+  // The app is plain files served by Workers Static Assets: free, unlimited
+  // and cached at the edge. Only /api/* runs the Worker.
+  "assets": {
+    "directory": "./public",
+    "run_worker_first": ["/api/*"]
+  },
   // Only reachable through the custom domain, which Cloudflare Access
   // protects. A workers.dev or preview URL would skip the login.
+  "routes": [{ "pattern": "tokyomodelvault.com", "custom_domain": true }],
   "workers_dev": false,
   "preview_urls": false,
   "observability": { "enabled": true },
@@ -18,7 +27,7 @@
     }
   ],
   "vars": {
-    // Cloudflare Access: team domain and the ERC-CAL application's audience tag.
+    // Cloudflare Access: team domain and the application's audience tag.
     "ACCESS_TEAM_DOMAIN": "https://broad-violet-42c8.cloudflareaccess.com",
     "ACCESS_AUD": "cb755a6aa4ab3eccaf353196c61e2d3c4ef979689c5f6d457ba6611a905e9e60",
     // "true" only in .dev.vars for local development.

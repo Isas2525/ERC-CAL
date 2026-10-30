@@ -4,6 +4,10 @@ import { _resetKeyCache } from "../src/auth";
 
 beforeEach(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
-  await env.DB.exec("DELETE FROM unlock_codes");
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM code_history"),
+    env.DB.prepare("DELETE FROM vehicles"),
+    env.DB.prepare("DELETE FROM unlock_codes"),
+  ]);
   _resetKeyCache();
 });
