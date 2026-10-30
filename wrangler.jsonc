@@ -18,12 +18,12 @@
     }
   ],
   "vars": {
-    // Set once the Access application exists (see README).
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": "",
+    // Cloudflare Access: team domain and the ERC-CAL application's audience tag.
+    "ACCESS_TEAM_DOMAIN": "https://broad-violet-42c8.cloudflareaccess.com",
+    "ACCESS_AUD": "cb755a6aa4ab3eccaf353196c61e2d3c4ef979689c5f6d457ba6611a905e9e60",
     // "true" only in .dev.vars for local development.
-    "AUTH_DISABLED": "",
-    // Comma-separated; set as a secret: wrangler secret put ALLOWED_EMAILS
-    "ALLOWED_EMAILS": ""
+    "AUTH_DISABLED": ""
   }
+  // Secret, not a var: ALLOWED_EMAILS (comma-separated), set with
+  //   npx wrangler secret put ALLOWED_EMAILS
 }
