@@ -1,0 +1,16 @@
+{
+  "name": "Tokyo Model Vault",
+  "short_name": "Model Vault",
+  "description": "Keep the infotainment unlock codes for your cars, and the steps to get them.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0d15",
+  "theme_color": "#0a0d15",
+  "icons": [
+    { "src": "/logo.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

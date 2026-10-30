@@ -7,32 +7,17 @@
   // Builds public/styles.css before every `wrangler dev` and `wrangler deploy`.
   "build": { "command": "npm run build:css" },
   // The app is plain files served by Workers Static Assets: free, unlimited
-  // and cached at the edge. Only /api/* runs the Worker.
+  // and cached at the edge. Only /api/* (VIN decoding) runs the Worker.
+  // Visitors' garages live in their own browsers, so there is no database.
   "assets": {
     "directory": "./public",
     "run_worker_first": ["/api/*"]
   },
-  // Only reachable through the custom domain, which Cloudflare Access
-  // protects. A workers.dev or preview URL would skip the login.
-  "routes": [{ "pattern": "tokyomodelvault.com", "custom_domain": true }],
+  "routes": [
+    { "pattern": "tokyomodelvault.com", "custom_domain": true },
+    { "pattern": "staging.tokyomodelvault.com", "custom_domain": true }
+  ],
   "workers_dev": false,
   "preview_urls": false,
-  "observability": { "enabled": true },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "erc-cal",
-      "database_id": "d18e6e2c-47d0-42df-91d3-2672432861ca",
-      "migrations_dir": "migrations"
-    }
-  ],
-  "vars": {
-    // Cloudflare Access: team domain and the application's audience tag.
-    "ACCESS_TEAM_DOMAIN": "https://broad-violet-42c8.cloudflareaccess.com",
-    "ACCESS_AUD": "cb755a6aa4ab3eccaf353196c61e2d3c4ef979689c5f6d457ba6611a905e9e60",
-    // "true" only in .dev.vars for local development.
-    "AUTH_DISABLED": ""
-  }
-  // Secret, not a var: ALLOWED_EMAILS (comma-separated), set with
-  //   npx wrangler secret put ALLOWED_EMAILS
+  "observability": { "enabled": true }
 }

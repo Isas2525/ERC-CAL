@@ -1,6 +1,7 @@
 /* Add or edit a vehicle. Live checks use the same rules as the server. */
 
-import { api, editable } from "../api.js";
+import { api } from "../api.js";
+import { editable, garage, requestPersistence } from "../store.js";
 import {
   checkCode, checkErc, checkSerial, checkText, checkVin, checkYear, CODE_SOURCES, findMake, MAKES,
 } from "../shared/rules.js";
@@ -59,7 +60,7 @@ function section(title, description, ...children) {
 }
 
 export async function renderForm(id) {
-  const existing = id ? await api(`/api/vehicles/${id}`) : null;
+  const existing = id ? garage.get(id) : null;
   const initial = existing ? editable(existing) : {};
   let unitTouched = Boolean(existing);
 
@@ -195,7 +196,8 @@ export async function renderForm(id) {
 
       submit.disabled = true;
       try {
-        const saved = await api(existing ? `/api/vehicles/${id}` : "/api/vehicles", { method: existing ? "PUT" : "POST", body });
+        const saved = existing ? garage.update(id, body) : garage.create(body);
+        requestPersistence();
         toast(existing ? "Changes saved" : "Vehicle added");
         location.hash = `#/v/${saved.id}`;
       } catch (err) {
@@ -206,9 +208,9 @@ export async function renderForm(id) {
           formError.textContent = err.message;
           formError.classList.remove("hidden");
         }
-        if (err.data?.existing_id) {
+        if (err.existing_id) {
           formError.replaceChildren(err.message, " ",
-            h("a", { href: `#/v/${err.data.existing_id}`, class: "font-semibold underline" }, "Open it"));
+            h("a", { href: `#/v/${err.existing_id}`, class: "font-semibold underline" }, "Open it"));
           formError.classList.remove("hidden");
         }
       } finally {

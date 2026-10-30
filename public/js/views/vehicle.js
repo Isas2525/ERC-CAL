@@ -1,6 +1,6 @@
 /* One vehicle: its unlock code, or the steps to get one; details; history. */
 
-import { api, editable } from "../api.js";
+import { editable, garage } from "../store.js";
 import { checkCode, checkErc, checkSerial, CODE_SOURCES, findMake, findSource } from "../shared/rules.js";
 import { findUnit, usesErc, vehicleStatus } from "../shared/units.js";
 import {
@@ -176,14 +176,14 @@ function historyList(v) {
 }
 
 export async function renderVehicle(id) {
-  const v = await api(`/api/vehicles/${id}`);
+  const v = garage.get(id);
   const unit = findUnit(v.unit_brand);
   const root = h("div", { class: "fade-in space-y-6" });
 
   const rerender = async () => root.replaceWith(await renderVehicle(id));
   const save = async (changes, message) => {
     try {
-      await api(`/api/vehicles/${id}`, { method: "PUT", body: { ...editable(v), ...changes } });
+      garage.update(id, { ...editable(v), ...changes });
       toast(message);
       await rerender();
     } catch (err) {
@@ -193,13 +193,13 @@ export async function renderVehicle(id) {
   const remove = async () => {
     const ok = await confirmDialog({
       title: `Delete ${vehicleTitle(v)}?`,
-      body: "This removes the vehicle, its unlock code and its code history. Export a backup first if you might need them.",
+      body: "This removes the vehicle, its unlock code and its code history from this device. Export a backup first if you might need them.",
       confirmLabel: "Delete vehicle",
       danger: true,
     });
     if (!ok) return;
     try {
-      await api(`/api/vehicles/${id}`, { method: "DELETE" });
+      garage.remove(id);
       toast("Vehicle deleted");
       location.hash = "#/";
     } catch (err) {

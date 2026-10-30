@@ -1,9 +1,9 @@
 /* Garage: every vehicle at a glance, search, and backups. */
 
-import { api } from "../api.js";
+import { canSave, garage } from "../store.js";
 import { findMake, toKey } from "../shared/rules.js";
 import { findUnit, vehicleStatus } from "../shared/units.js";
-import { button, cls, h, icon, mask, statusPill, toast, vehicleSubtitle, vehicleTitle } from "../ui.js";
+import { button, cls, formatDate, h, icon, mask, statusPill, toast, vehicleSubtitle, vehicleTitle } from "../ui.js";
 
 function matches(v, query) {
   const q = query.trim().toLowerCase();
@@ -52,7 +52,7 @@ function emptyState() {
       h("div", { class: "mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-accent-500/12 text-accent-600 dark:text-accent-300" }, icon("car", "h-7 w-7")),
       h("h2", { class: "mt-4 text-xl font-semibold" }, "Add your first car"),
       h("p", { class: "mx-auto mt-2 max-w-md text-sm text-muted" },
-        "Save each car's infotainment details once. When the screen locks after a battery change, the code is here in seconds."),
+        "Save each car's infotainment details once. When the screen locks after a battery change, the code is here in seconds. No account needed: everything stays on this device."),
       button("primary", { href: "#/add", class: "mt-6" }, icon("plus"), "Add a vehicle")),
     h("ol", { class: "grid gap-6 px-6 py-8 sm:grid-cols-3 sm:px-10" },
       step(1, "Add the car", "Its VIN or Japanese chassis number, and the head unit's serial if you have it."),
@@ -69,16 +69,50 @@ async function importBackup(file, rerender) {
     return;
   }
   try {
-    const res = await api("/api/import", { method: "POST", body: data });
-    toast(res.message);
+    toast(garage.importBackup(data).message);
     rerender();
   } catch (err) {
     toast(err.message);
   }
 }
 
+function exportBackup(rerender) {
+  const backup = garage.exportBackup();
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = h("a", { href: url, download: `tokyo-model-vault-${backup.exported_at.slice(0, 10)}.json`, class: "hidden" });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  toast("Backup downloaded");
+  rerender();
+}
+
+const BACKUP_EVERY_DAYS = 30;
+
+/** Where the garage lives, and a nudge when it has no recent backup. */
+function storageNotice(vehicles, lastBackup, rerender) {
+  if (!canSave) {
+    return h("div", { class: "rounded-2xl border border-danger/30 bg-danger/[0.06] p-4 text-sm", role: "alert" },
+      h("p", { class: "font-semibold text-danger" }, "This browser isn't letting the site save anything"),
+      h("p", { class: "mt-1 text-muted" }, "Private browsing or blocked site data is on, so your garage disappears when you close this tab. Open the site in a normal window to keep it."));
+  }
+  const withCode = vehicles.filter((v) => v.unlock_code).length;
+  const stale = !lastBackup || Date.now() - Date.parse(lastBackup) > BACKUP_EVERY_DAYS * 86_400_000;
+  if (!withCode || !stale) return null;
+  return h("div", { class: "flex flex-wrap items-center gap-3 rounded-2xl border border-warn/30 bg-warn/[0.07] p-4 text-sm" },
+    h("span", { class: "text-warn" }, icon("alert", "h-5 w-5")),
+    h("div", { class: "min-w-0 flex-1" },
+      h("p", { class: "font-semibold" }, lastBackup ? "Time for a fresh backup" : "Back up your codes"),
+      h("p", { class: "mt-0.5 text-muted" },
+        "Your garage is saved only in this browser. Clearing site data, or not visiting for a while on iPhone, can erase it. Keep a backup file somewhere safe.")),
+    button("primary", { onclick: () => exportBackup(rerender) }, icon("download"), "Export backup"));
+}
+
 export async function renderGarage() {
-  const vehicles = await api("/api/vehicles");
+  const vehicles = garage.list();
+  const { last_backup_at } = garage.stats();
   const root = h("div", { class: "fade-in space-y-6" });
   const rerender = async () => root.replaceWith(await renderGarage());
 
@@ -94,6 +128,9 @@ export async function renderGarage() {
           : "Your private vault for infotainment unlock codes.")),
       vehicles.length > 0 && button("primary", { href: "#/add" }, icon("plus"), "Add vehicle")),
   );
+
+  const notice = storageNotice(vehicles, last_backup_at, rerender);
+  if (notice) root.append(notice);
 
   if (!vehicles.length) {
     root.append(emptyState());
@@ -135,8 +172,10 @@ export async function renderGarage() {
     onchange: () => fileInput.files[0] && importBackup(fileInput.files[0], rerender),
   });
   root.append(h("div", { class: "flex flex-wrap items-center gap-2 border-t border-line pt-5 text-sm" },
-    h("span", { class: "mr-auto text-muted" }, "Backups keep your codes safe if anything happens to the database."),
-    vehicles.length > 0 && button("ghost", { href: "/api/export", download: "" }, icon("download"), "Export backup"),
+    h("span", { class: "mr-auto text-muted" },
+      "Your garage is stored privately in this browser. Use a backup to move it to another device.",
+      last_backup_at ? ` Last backup ${formatDate(last_backup_at)}.` : null),
+    vehicles.length > 0 && button("ghost", { onclick: () => exportBackup(rerender) }, icon("download"), "Export backup"),
     button("ghost", { onclick: () => fileInput.click() }, icon("upload"), "Import backup"),
     fileInput));
 

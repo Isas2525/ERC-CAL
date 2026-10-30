@@ -5,7 +5,12 @@
  */
 
 import { checkVin, MAKES } from "../public/js/shared/rules.js";
-import { ValidationError } from "./validation";
+/** Bad input, with the field it concerns; answered with a 422. */
+export class InputError extends Error {
+  constructor(message: string, readonly field: string | null = null) {
+    super(message);
+  }
+}
 
 export type VinFetcher = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -24,7 +29,7 @@ const clean = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : nu
 
 export async function decodeVin(raw: string, fetcher: VinFetcher = fetch): Promise<VinDecodeResult> {
   const vin = checkVin(raw);
-  if (vin.error) throw new ValidationError(vin.error, "vin");
+  if (vin.error) throw new InputError(vin.error, "vin");
   const base = { kind: vin.kind as VinDecodeResult["kind"], check_digit_ok: vin.check_digit_ok ?? null };
   const miss = (message: string): VinDecodeResult =>
     ({ ...base, decoded: false, make: null, make_name: null, model: null, model_year: null, message });

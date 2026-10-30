@@ -1,6 +1,6 @@
 /* Tokyo Model Vault: a small hash-routed app with no build step and no
- * framework. Each route renders a view into <main>; the server re-validates
- * everything, so client checks only give instant feedback. */
+ * framework. Each route renders a view into <main>. The garage lives in
+ * this browser (js/store.js); the server only decodes VINs. */
 
 import { h, button, cls, icon } from "./ui.js";
 import { renderGarage } from "./views/garage.js";
@@ -21,9 +21,7 @@ export function errorView(err) {
     h("div", { class: "mx-auto grid h-12 w-12 place-items-center rounded-full bg-danger/10 text-danger" }, icon("alert", "h-6 w-6")),
     h("h1", { class: "mt-4 text-lg font-semibold" }, err.status === 404 ? "Not found" : "Something went wrong"),
     h("p", { class: "mt-2 text-sm text-muted" }, err.message),
-    err.expired
-      ? button("primary", { class: "mt-6", onclick: () => location.reload() }, "Sign in again")
-      : button("secondary", { class: "mt-6", href: "#/" }, "Back to garage"));
+    button("secondary", { class: "mt-6", href: "#/" }, "Back to garage"));
 }
 
 let renderId = 0;
@@ -65,4 +63,13 @@ document.getElementById("skip").addEventListener("click", (e) => {
 });
 
 window.addEventListener("hashchange", route);
+// Another tab changed the garage: show the new state, unless a form is open.
+window.addEventListener("storage", (e) => {
+  if (e.key === "tmv-garage" && !document.querySelector("#view form input:focus, #view form textarea:focus")) route();
+});
 route();
+
+// Offline support: the app shell is cached by sw.js.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+}
